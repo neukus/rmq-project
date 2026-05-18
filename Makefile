@@ -50,6 +50,6 @@ open-plots:
 	open plots/*.png
 
 report:
-    cd report && latexmk -pvc -pdf -interaction=nonstopmode report.tex -cd -shell-escape
+	cd report && latexmk -pvc -pdf -interaction=nonstopmode report.tex -cd -shell-escape
 report-debug:
-    cd report && latexmk -pdf report.tex -cd
+	cd report && latexmk -pdf report.tex -cd
