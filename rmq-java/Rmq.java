@@ -6,7 +6,7 @@ interface Rmq {
     String name();
     /** Space usage in bytes. */
     long space();
-    /** Returns the minimum value in data[l..r] (inclusive) as a raw long (unsigned). */
+    /** Returns the minimum value in data[l..=r] (inclusive) as a raw long (unsigned). */
     long query(int l, int r);
 }
 
