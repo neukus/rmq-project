@@ -1,14 +1,20 @@
 # Range minimum queries programming project
 
+Programming project along the Advanced Data Structures 2026 [KIT
+course](https://ae.iti.kit.edu/english/5028.php).
+See the [teaching page](https://curiouscoding.nl/teaching/) for the [RMQ script](https://curiouscoding.nl/teaching/rmq-notes/).
+
 The project is to implement the following range minimum query (RMQ) algorithms:
 - compute on the fly,
 - precompute all queries,
 - sparse array,
 - segment tree,
-- block based approach (with varying block size),
+- block based approach:
+  - Vary the block size from e.g. 2 to 64.
   - Include both the variant that computes suffix/prefix minima on the fly, and
     the variant that precomputes them.
-- Cartesian trees (with varying block size).
+- Cartesian trees:
+  - Again with varying block sizes.
   - Optional: Implement the recursive approaches that use $O(n)$ /bits/ or even
     $2n+o(n)$ bits.
  
