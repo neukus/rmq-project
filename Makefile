@@ -8,37 +8,10 @@ generate_input:
 
 # TODO: Customize this for your language.
 # Make sure to end with a `rmq` binary in the root directory.
-build: build-rust
-
-build-rust:
-	cd rmq-rust && cargo build --release
-	cp rmq-rust/target/release/rmq-rust rmq
+build: build-cpp
 
 build-cpp:
 	g++ -std=c++17 -O3 -march=native rmq-cpp/*.cpp -o rmq
-
-build-java:
-	javac -d rmq-java/build rmq-java/Rmq.java
-	printf '#!/usr/bin/env sh\nexec java -cp "$(dirname "$$0")/rmq-java/build" Main "$$@"\n' > rmq
-	chmod +x rmq
-
-build-csharp:
-	mcs -optimize+ -out:rmq-csharp/rmq-csharp.exe rmq-csharp/Program.cs
-	printf '#!/usr/bin/env sh\nexec mono "$(dirname "$$0")/rmq-csharp/rmq-csharp.exe" "$$@"\n' > rmq
-	chmod +x rmq
-
-build-go:
-	cd rmq-go && go build -o rmq-go .
-	cp rmq-go/rmq-go rmq
-
-build-kotlin:
-	kotlinc rmq-kotlin/Rmq.kt -include-runtime -d rmq-kotlin/rmq-kotlin.jar
-	printf '#!/usr/bin/env sh\nexec java -jar "$(dirname "$$0")/rmq-kotlin/rmq-kotlin.jar" "$$@"\n' > rmq
-	chmod +x rmq
-
-build-haskell:
-	ghc -O3 -package vector -package time -package directory rmq-haskell/Rmq.hs -o rmq-haskell/rmq-haskell
-	cp rmq-haskell/rmq-haskell rmq
 
 run:
 	./rmq input > data.csv
