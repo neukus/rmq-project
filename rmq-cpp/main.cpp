@@ -334,7 +334,7 @@ struct Blocks {
 
 template <typename SizePolicy>
 struct BlocksPrecomputed {
-    static std::string name() { return "Blocks_" + SizePolicy::name() + "_Precomputed"; }
+    static std::string name() { return "Blocks_Precom_" + SizePolicy::name(); }
     static size_t max_n() { return SIZE_MAX; }
 
     const std::vector<uint64_t>* data;
@@ -388,7 +388,7 @@ struct BlocksPrecomputed {
         size_t levels = 32 - __builtin_clz((unsigned int)num_blocks);
         std::vector<uint64_t> table(levels * num_blocks);
         std::copy(block_min.begin(), block_min.end(), table.begin());
-
+        
         for (size_t level = 1; level < levels; ++level) {
             size_t len = size_t(1) << level;
             size_t half = size_t(1) << (level - 1);
@@ -433,6 +433,203 @@ struct BlocksPrecomputed {
             res = std::min(res, middle);
         }
 
+        return res;
+    }
+};
+
+template <typename SizePolicy>
+struct BlocksPrecomputedIdx {
+    static std::string name() { return "Blocks_Precom_Idx_" + SizePolicy::name(); }
+    static size_t max_n() { return SIZE_MAX; }
+
+    const std::vector<uint64_t>* data;
+    std::vector<uint32_t> blocks;  // sparse table of INDICES
+    std::vector<uint32_t> pre;     // pre[i] = argmin over [block_start(i), i]
+    std::vector<uint32_t> suf;     // suf[i] = argmin over [i, block_end(i)]
+
+    size_t n = 0;
+    size_t block_size = 0;
+    size_t num_blocks = 0;
+
+    static BlocksPrecomputedIdx build(const std::vector<uint64_t>& data) {
+        size_t n = data.size();
+        size_t block_size = SizePolicy::get(n);
+        if (block_size == 0)
+            block_size = 1;
+        size_t num_blocks = (n + block_size - 1) / block_size;
+
+        std::vector<uint32_t> block_arg(num_blocks);
+        std::vector<uint32_t> pre(n);
+        std::vector<uint32_t> suf(n);
+
+        // block argmin + prefix argmin
+        for (size_t i = 0; i < n; ++i) {
+            size_t b = i / block_size;
+            size_t start = b * block_size;
+
+            if (i == start) {
+                pre[i] = (uint32_t)i;
+                block_arg[b] = (uint32_t)i;
+            } else {
+                pre[i] = (data[i] < data[pre[i - 1]]) ? (uint32_t)i : pre[i - 1];
+                if (data[i] < data[block_arg[b]])
+                    block_arg[b] = (uint32_t)i;
+            }
+        }
+
+        // suffix argmin (cast to int to prevent underflow)
+        for (int i = (int)n - 1; i >= 0; --i) {
+            size_t b = (size_t)i / block_size;
+            size_t end = std::min(n, (b + 1) * block_size) - 1;
+
+            if ((size_t)i == end) {
+                suf[i] = (uint32_t)i;
+            } else {
+                suf[i] = (data[i] < data[suf[i + 1]]) ? (uint32_t)i : suf[i + 1];
+            }
+        }
+
+        // sparse table over block minima, storing global indices
+        size_t levels = 32 - __builtin_clz((unsigned int)num_blocks);
+        std::vector<uint32_t> table(levels * num_blocks);
+        std::copy(block_arg.begin(), block_arg.end(), table.begin());
+        for (size_t level = 1; level < levels; ++level) {
+            size_t len = size_t(1) << level;
+            size_t half = size_t(1) << (level - 1);
+            for (size_t j = 0; j + len <= num_blocks; ++j) {
+                uint32_t a = table[(level - 1) * num_blocks + j];
+                uint32_t bb = table[(level - 1) * num_blocks + j + half];
+                table[level * num_blocks + j] = (data[a] <= data[bb]) ? a : bb;
+            }
+        }
+        return {&data, std::move(table), std::move(pre), std::move(suf), n, block_size, num_blocks};
+    }
+    size_t space() const {
+        return sizeof(*this) + (blocks.capacity() + pre.capacity() + suf.capacity()) * sizeof(uint32_t);
+    }
+    uint64_t query(size_t l, size_t r) const {
+        size_t bl = l / block_size;
+        size_t br = r / block_size;
+        // case 1: same block
+        if (bl == br) {
+            uint64_t m = (*data)[l];
+            for (size_t i = l + 1; i <= r; ++i) {
+                m = std::min(m, (*data)[i]);
+            }
+            return m;
+        }
+
+        // suffix + prefix
+        uint64_t res = std::min((*data)[suf[l]], (*data)[pre[r]]);
+        // middle blocks (sparse table of indices)
+        if (bl + 1 < br) {
+            size_t mb_l = bl + 1;
+            size_t mb_r = br - 1;
+            int level = 31 - __builtin_clz((unsigned int)(mb_r - mb_l + 1));
+            size_t block_len = size_t(1) << level;
+            uint32_t a = blocks[level * num_blocks + mb_l];
+            uint32_t b = blocks[level * num_blocks + mb_r - block_len + 1];
+
+            res = std::min(res, std::min((*data)[a], (*data)[b]));
+        }
+        return res;
+    }
+};
+
+template <typename SizePolicy>
+struct BlocksPrecomputedIdx16 {
+    static std::string name() { return "Blocks_PrecomIdx16_" + SizePolicy::name(); }
+    static size_t max_n() { return SIZE_MAX; }
+
+    const std::vector<uint64_t>* data;
+    std::vector<uint32_t> blocks;
+    std::vector<uint16_t> pre;  // offset within block of argmin over [start, i]
+    std::vector<uint16_t> suf;  // offset within block of argmin over [i, end]
+
+    size_t n = 0;
+    size_t block_size = 0;
+    size_t num_blocks = 0;
+
+    static BlocksPrecomputedIdx16 build(const std::vector<uint64_t>& data) {
+        size_t n = data.size();
+        size_t block_size = SizePolicy::get(n);
+        if (block_size == 0)
+            block_size = 1;
+        size_t num_blocks = (n + block_size - 1) / block_size;
+
+        std::vector<uint32_t> block_arg(num_blocks);
+        std::vector<uint16_t> pre(n);
+        std::vector<uint16_t> suf(n);
+        
+        for (size_t i = 0; i < n; ++i) {
+            size_t b = i / block_size;
+            size_t start = b * block_size;
+
+            if (i == start) {
+                pre[i] = 0;
+                block_arg[b] = (uint32_t)i;
+            } else {
+                size_t prev_global = start + pre[i - 1];
+                pre[i] = (data[i] < data[prev_global]) ? (uint16_t)(i - start) : pre[i - 1];
+                if (data[i] < data[block_arg[b]])
+                    block_arg[b] = (uint32_t)i;
+            }
+        }
+
+        for (int i = (int)n - 1; i >= 0; --i) {
+            size_t b = (size_t)i / block_size;
+            size_t start = b * block_size;
+            size_t end = std::min(n, (b + 1) * block_size) - 1;
+
+            if ((size_t)i == end) {
+                suf[i] = (uint16_t)((size_t)i - start);
+            } else {
+                size_t next_global = start + suf[i + 1];
+                suf[i] = (data[i] < data[next_global]) ? (uint16_t)((size_t)i - start) : suf[i + 1];
+            }
+        }
+
+        size_t levels = 32 - __builtin_clz((unsigned int)num_blocks);
+        std::vector<uint32_t> table(levels * num_blocks);
+        std::copy(block_arg.begin(), block_arg.end(), table.begin());
+        for (size_t level = 1; level < levels; ++level) {
+            size_t len = size_t(1) << level;
+            size_t half = size_t(1) << (level - 1);
+            for (size_t j = 0; j + len <= num_blocks; ++j) {
+                uint32_t a = table[(level - 1) * num_blocks + j];
+                uint32_t bb = table[(level - 1) * num_blocks + j + half];
+                table[level * num_blocks + j] = (data[a] <= data[bb]) ? a : bb;
+            }
+        }
+        return {&data, std::move(table), std::move(pre), std::move(suf), n, block_size, num_blocks};
+    }
+    size_t space() const {
+        return sizeof(*this) + blocks.capacity() * sizeof(uint32_t) +
+               (pre.capacity() + suf.capacity()) * sizeof(uint16_t);
+    }
+    uint64_t query(size_t l, size_t r) const {
+        size_t bl = l / block_size;
+        size_t br = r / block_size;
+
+        if (bl == br) {
+            uint64_t m = (*data)[l];
+            for (size_t i = l + 1; i <= r; ++i) m = std::min(m, (*data)[i]);
+            return m;
+        }
+
+        size_t ls = bl * block_size;
+        size_t rs = br * block_size;
+        uint64_t res = std::min((*data)[ls + suf[l]], (*data)[rs + pre[r]]);
+        
+        if (bl + 1 < br) {
+            size_t mb_l = bl + 1;
+            size_t mb_r = br - 1;
+            int level = 31 - __builtin_clz((unsigned int)(mb_r - mb_l + 1));
+            size_t block_len = size_t(1) << level;
+            uint32_t a = blocks[level * num_blocks + mb_l];
+            uint32_t b = blocks[level * num_blocks + mb_r - block_len + 1];
+            res = std::min(res, std::min((*data)[a], (*data)[b]));
+        }
         return res;
     }
 };
@@ -575,7 +772,7 @@ struct CartesianBlocks {
 };
 
 template <typename SizePolicy>
-struct Cartesian_Idx {
+struct CartesianIdx {
     static std::string name() { return "Cartesian_Idx_" + SizePolicy::name(); }
     static size_t max_n() { return SIZE_MAX; }
 
@@ -589,7 +786,7 @@ struct Cartesian_Idx {
     size_t num_blocks = 0;
     size_t levels = 0;
 
-    static Cartesian_Idx build(const std::vector<uint64_t>& data) {
+    static CartesianIdx build(const std::vector<uint64_t>& data) {
         size_t n = data.size();
         size_t block_size = SizePolicy::get(n);
         if (block_size == 0)
@@ -777,28 +974,45 @@ int main(int argc, char* argv[]) {
         bench<NSegmentTree>(input);
 
         // bench<Blocks<SqrtBlockSize>>(input);
-        bench<Blocks<LogBlockSize>>(input);  // <-
-        // bench<Blocks<Fixed64BlockSize>>(input);
+        bench<Blocks<LogBlockSize>>(input);  // <---------
+        // bench<Blocks<HalfLogBlockSize>>(input);
+        bench<Blocks<Fixed64BlockSize>>(input);  // <-------
         // bench<Blocks<Fixed32BlockSize>>(input);
         // bench<Blocks<Fixed16BlockSize>>(input);
         // bench<Blocks<Fixed8BlockSize>>(input);
         // bench<Blocks<Fixed4BlockSize>>(input);
 
-        bench<BlocksPrecomputed<SqrtBlockSize>>(input);  // <-
-        bench<BlocksPrecomputed<LogBlockSize>>(input);   // <-
+        bench<BlocksPrecomputed<SqrtBlockSize>>(input);  // <--------
+        // bench<BlocksPrecomputed<LogBlockSize>>(input);
+        // bench<BlocksPrecomputed<HalfLogBlockSize>>(input);
         // bench<BlocksPrecomputed<Fixed64BlockSize>>(input);
         // bench<BlocksPrecomputed<Fixed16BlockSize>>(input);
         // bench<BlocksPrecomputed<Fixed32BlockSize>>(input);
         // bench<BlocksPrecomputed<Fixed8BlockSize>>(input);
         // bench<BlocksPrecomputed<Fixed4BlockSize>>(input);
 
-        // bench<CartesianBlocks<Fixed4BlockSize>>(input);
-        bench<CartesianBlocks<Fixed8BlockSize>>(input);
-        // bench<CartesianBlocks<Fixed16BlockSize>>(input);
-        bench<CartesianBlocks<HalfLogBlockSize>>(input);
+        bench<BlocksPrecomputedIdx<SqrtBlockSize>>(input);  // <--------
+        // bench<BlocksPrecomputedIdx<LogBlockSize>>(input);
+        // bench<BlocksPrecomputedIdx<HalfLogBlockSize>>(input);
+        // bench<BlocksPrecomputedIdx<Fixed64BlockSize>>(input);
+        // bench<BlocksPrecomputedIdx<Fixed16BlockSize>>(input);
+        // bench<BlocksPrecomputedIdx<Fixed32BlockSize>>(input);
+        // bench<BlocksPrecomputedIdx<Fixed8BlockSize>>(input);
+        // bench<BlocksPrecomputedIdx<Fixed4BlockSize>>(input);
 
-        bench<Cartesian_Idx<HalfLogBlockSize>>(input);
-        bench<Cartesian_Idx<Fixed8BlockSize>>(input);
+        bench<BlocksPrecomputedIdx16<SqrtBlockSize>>(input);
+
+        // bench<CartesianBlocks<LogBlockSize>>(input);
+        bench<CartesianBlocks<HalfLogBlockSize>>(input);  // <----------
+        // bench<CartesianBlocks<Fixed16BlockSize>>(input);
+        // bench<CartesianBlocks<Fixed8BlockSize>>(input);
+        // bench<CartesianBlocks<Fixed4BlockSize>>(input);
+
+        // bench<CartesianIdx<LogBlockSize>>(input);
+        bench<CartesianIdx<HalfLogBlockSize>>(input);  // <--------------
+        // bench<CartesianIdx<Fixed16BlockSize>>(input);
+        // bench<CartesianIdx<Fixed8BlockSize>>(input);
+        // bench<CartesianIdx<Fixed4BlockSize>>(input);
 
         // TODO: Add other implementations here.
     }
